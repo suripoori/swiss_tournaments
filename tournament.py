@@ -4,50 +4,58 @@
 #
 
 import psycopg2
-import bleach
 
+class DB:
 
-def connect():
-    """Connect to the PostgreSQL database.  Returns a database connection."""
-    conn = psycopg2.connect("dbname=tournament")
-    return conn
+    def __init__(self, db_con_str="dbname=tournament"):
+        """
+        Creates a database connection with the connection string provided
+        :param str db_con_str: Contains the database connection string, with a default value when no argument is passed to the parameter
+        """
+        self.conn = psycopg2.connect(db_con_str)
+
+    def cursor(self):
+        """
+        Returns the current cursor of the database
+        """
+        return self.conn.cursor();
+
+    def execute(self, sql_query_string, data=None, and_close=False):
+        """
+        Executes SQL queries
+        :param str sql_query_string: Contain the query string to be executed
+        :param bool and_close: If true, closes the database connection after executing and commiting the SQL Query
+        """
+        cursor = self.cursor()
+        cursor.execute(sql_query_string, data)
+        if and_close:
+            self.conn.commit()
+            self.close()
+        return {"conn": self.conn, "cursor": cursor if not and_close else None}
+
+    def close(self):
+        """
+        Closes the current database connection
+        """
+        return self.conn.close()
 
 
 def deleteMatches():
     """Remove all the match records from the database."""
-    conn = connect()
-    cur = conn.cursor()
-    try:
-        cur.execute(" DELETE FROM MATCH; ")
-        conn.commit()
-    except Exception as e:
-        print("Delete matches could not be completed")
+    DB().execute("DELETE FROM match", data=None, and_close=True)
 
 
 def deletePlayers():
     """Remove all the player records from the database."""
-    conn = connect()
-    cur = conn.cursor()
-    try:
-        cur.execute(" DELETE FROM MATCH; ")
-        cur.execute(" DELETE FROM PLAYER; ")
-        conn.commit()
-    except Exception as e:
-        print("Delete matches could not be completed")
-        raise e
+    DB().execute("DELETE FROM player", data=None, and_close=True)
 
 
 def countPlayers():
     """Returns the number of players currently registered."""
-    conn = connect()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT COUNT(*) FROM PLAYER; ")
-        result = cur.fetchone()[0]
-        return int(result)
-    except Exception as e:
-        print("Could not count the number of players")
-        raise e
+    conn = DB().execute("SELECT count(*) FROM player")
+    cursor = conn["cursor"].fetchone()
+    conn["conn"].close()
+    return cursor[0]
 
 
 def registerPlayer(name):
@@ -59,11 +67,8 @@ def registerPlayer(name):
     Args:
       name: the player's full name (need not be unique).
     """
-    conn = connect()
-    cur = conn.cursor()
     try:
-        cur.execute("""INSERT INTO PLAYER (name, score, matches) VALUES (%s, %s, %s);""", (bleach.clean(name), 0, 0))
-        conn.commit()
+        DB().execute("""INSERT INTO PLAYER (name) VALUES (%s);""", (name,), True)
     except Exception as e:
         print("Could not register a player {} into the tournament".format(name))
         raise e
@@ -82,12 +87,14 @@ def playerStandings():
         wins: the number of matches the player has won
         matches: the number of matches the player has played
     """
-    conn = connect()
-    cur = conn.cursor()
     return_list = []
     try:
-        cur.execute("SELECT id, name, score, matches FROM PLAYER ORDER BY SCORE DESC")
-        result = cur.fetchall()
+        sql = "SELECT wins.id, wins.name, wins.wins, matches.matches " \
+              "FROM wins LEFT JOIN matches ON wins.id = matches.id " \
+              "ORDER BY wins.wins DESC;"
+        # conn = DB().execute("SELECT id, name FROM PLAYER ORDER BY SCORE DESC")
+        conn = DB().execute(sql)
+        result = conn["cursor"].fetchall()
         for res in result:
             return_list.append((res[0], res[1], res[2], res[3]))
         return return_list
@@ -103,23 +110,13 @@ def reportMatch(winner, loser):
       winner:  the id number of the player who won
       loser:  the id number of the player who lost
     """
-    conn = connect()
-    cur = conn.cursor()
     try:
-        cur.execute(" INSERT INTO MATCH (winner, loser) VALUES ('{}', '{}');".format(winner, loser))
-        score = getScore(winner)
-        score += 1
-        winner_matches = getMatches(winner)
-        loser_matches = getMatches(loser)
-        winner_matches += 1
-        loser_matches += 1
-        cur.execute(" UPDATE PLAYER SET score = {}, matches = {} WHERE id = {};".format(score, winner_matches, winner))
-        cur.execute(" UPDATE PLAYER SET matches = {} WHERE id = {};".format(loser_matches, loser))
-        conn.commit()
+        DB().execute(" INSERT INTO MATCH (winner, loser) VALUES (%s, %s);", (winner, loser), True)
     except Exception as e:
         print("Could not write into MATCH table or update player table")
         raise e
- 
+
+
 def swissPairings():
     """Returns a list of pairs of players for the next round of a match.
   
@@ -150,46 +147,28 @@ def getScore(id):
     :param id: ID of the player
     :return: integer score
     """
-    conn = connect()
-    cur = conn.cursor()
+    sql = "SELECT count(winner) AS wins FROM player LEFT JOIN match ON match.winner = player.id " \
+          "where player.id = %s;"
     try:
-        cur.execute(" SELECT score FROM PLAYER WHERE id = {}".format(id))
-        result = cur.fetchone()[0]
+        conn = DB().execute(sql, (id,))
+        result = conn["cursor"].fetchone()[0]
         return int(result)
     except Exception as e:
         print("Could not get the score for the specified player id")
         raise e
+
 
 def getPlayers():
     """
     :return: Dictionary of ids and players
     """
     return_dict = {}
-    conn = connect()
-    cur = conn.cursor()
     try:
-        cur.execute(" SELECT id, name FROM PLAYER")
-        result = cur.fetchall()
+        conn = DB().execute(" SELECT id, name FROM PLAYER")
+        result = conn["cursor"].fetchall()
         for res in result:
             return_dict[res[0]] = res[1]
         return return_dict
     except Exception as e:
         print("Could not get all the players")
-        raise e
-
-
-def getMatches(id):
-    """
-    Returns the number of matches of the player
-    :param id: ID of the player
-    :return: integer number of matches
-    """
-    conn = connect()
-    cur = conn.cursor()
-    try:
-        cur.execute(" SELECT matches FROM PLAYER WHERE id = {}".format(id))
-        result = cur.fetchone()[0]
-        return int(result)
-    except Exception as e:
-        print("Could not get the matches for the specified player id")
         raise e
